@@ -310,6 +310,7 @@ final class StdPath extends OsmPath {
     if (rc.footMode) {
       // Use Tobler's hiking function for walking sections
       speed = rc.maxSpeed * Math.exp(-3.5 * Math.abs(incline + 0.05));
+      speed = Math.min(speed, maxSpeed); // a way's own limit (profile maxspeed) applies to walking too
     } else if (rc.bikeMode) {
       speed = solveCubic(rc.S_C_x, f_roll, rc.bikerPower);
       speed = Math.min(speed, maxSpeed);
