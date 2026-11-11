@@ -53,6 +53,10 @@ public final class RoutingContext {
 
   public int memoryclass = 64;
 
+  // isochrone: how far out to search (seconds of travel), and track travel time during the search
+  public double isochroneTime;
+  public boolean alwaysComputeTime;
+
   public boolean carMode;
   public boolean bikeMode;
   public boolean footMode;

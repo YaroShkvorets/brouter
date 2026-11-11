@@ -289,7 +289,7 @@ final class StdPath extends OsmPath {
 
   @Override
   protected void computeKinematic(RoutingContext rc, double dist, double delta_h, boolean detailMode) {
-    if (!detailMode) {
+    if (!detailMode && !rc.alwaysComputeTime) {
       return;
     }
 

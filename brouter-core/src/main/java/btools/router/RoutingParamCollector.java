@@ -211,6 +211,8 @@ public class RoutingParamCollector {
           rctx.startDirection = Integer.valueOf(value);
         } else if (key.equals("roundTripStartDirection")) {
           rctx.roundTripStartDirection = Integer.valueOf(value);
+        } else if (key.equals("isochroneTime")) {
+          rctx.isochroneTime = Double.parseDouble(value);
         } else if (key.equals("roundTripDistance")) {
           rctx.roundTripDistance = Integer.valueOf(value);
         } else if (key.equals("roundTripDirectionAdd")) {

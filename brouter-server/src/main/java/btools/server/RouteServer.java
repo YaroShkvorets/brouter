@@ -263,19 +263,23 @@ public class RouteServer extends Thread implements Comparable<RouteServer> {
         }
         String headers = encodings == null || encodings.indexOf("gzip") < 0 ? null : "Content-Encoding: gzip\r\n";
         writeHttpHeader(bw, handler.getMimeType(), handler.getFileName(), headers, HTTP_STATUS_OK);
+        String body = null;
         if (engineMode == RoutingEngine.BROUTER_ENGINEMODE_ROUTING ||
             engineMode == RoutingEngine.BROUTER_ENGINEMODE_ROUNDTRIP) {
-          if (track != null) {
-            if (headers != null) { // compressed
-              ByteArrayOutputStream baos = new ByteArrayOutputStream();
-              Writer w = new OutputStreamWriter(new GZIPOutputStream(baos), "UTF-8");
-              w.write(handler.formatTrack(track));
-              w.close();
-              bw.flush();
-              clientSocket.getOutputStream().write(baos.toByteArray());
-            } else {
-              bw.write(handler.formatTrack(track));
-            }
+          if (track != null) body = handler.formatTrack(track);
+        } else if (engineMode == RoutingEngine.BROUTER_ENGINEMODE_ISOCHRONE) {
+          body = cr.getFoundInfo();
+        }
+        if (body != null) {
+          if (headers != null) { // compressed
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Writer w = new OutputStreamWriter(new GZIPOutputStream(baos), "UTF-8");
+            w.write(body);
+            w.close();
+            bw.flush();
+            clientSocket.getOutputStream().write(baos.toByteArray());
+          } else {
+            bw.write(body);
           }
         } else if (engineMode == RoutingEngine.BROUTER_ENGINEMODE_GETELEV ||
                    engineMode == RoutingEngine.BROUTER_ENGINEMODE_GETINFO) {

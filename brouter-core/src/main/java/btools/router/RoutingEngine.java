@@ -36,6 +36,7 @@ public class RoutingEngine extends Thread {
   public final static int BROUTER_ENGINEMODE_GETELEV = 2;
   public final static int BROUTER_ENGINEMODE_GETINFO = 3;
   public final static int BROUTER_ENGINEMODE_ROUNDTRIP = 4;
+  public final static int BROUTER_ENGINEMODE_ISOCHRONE = 5;
 
   private NodesCache nodesCache;
   private SortedHeap<OsmPath> openSet = new SortedHeap<>();
@@ -48,6 +49,7 @@ public class RoutingEngine extends Thread {
 
   private int nodeLimit; // used for target island search
   private int MAXNODES_ISLAND_CHECK = 500;
+  private static final int MAX_ISOCHRONE_TIME = 1800; // seconds; longer ones take hundreds of MB
   private OsmNodePairSet islandNodePairs = new OsmNodePairSet(MAXNODES_ISLAND_CHECK);
   private boolean useNodePoints = false; // use the start/end nodes  instead of crosspoint
 
@@ -195,6 +197,11 @@ public class RoutingEngine extends Thread {
         if (waypoints.size() < 1)
           throw new IllegalArgumentException("we need one lat/lon point at least!");
         doRoundTrip();
+        break;
+      case BROUTER_ENGINEMODE_ISOCHRONE:
+        if (waypoints.size() != 1)
+          throw new IllegalArgumentException("an isochrone needs exactly one lat/lon point");
+        doIsochrone(maxRunningTime);
         break;
       default:
         throw new IllegalArgumentException("not a valid engine mode");
@@ -2304,6 +2311,150 @@ public class RoutingEngine extends Thread {
     }
 
     return null;
+  }
+
+  /**
+   * Isochrone: every way section reachable from the one waypoint within
+   * routingContext.isochroneTime seconds, following the cheapest paths of the
+   * profile (the routes it would choose), with the travel time at both ends.
+   * The result is GeoJSON in outputMessage.
+   */
+  public void doIsochrone(long maxRunningTime) {
+    try {
+      startTime = System.currentTimeMillis();
+      this.maxRunningTime = maxRunningTime;
+      double maxTime = routingContext.isochroneTime;
+      if (!(maxTime > 0.) || maxTime > MAX_ISOCHRONE_TIME) {
+        throw new IllegalArgumentException("isochroneTime must be between 1 and " + MAX_ISOCHRONE_TIME + " seconds");
+      }
+      routingContext.alwaysComputeTime = true;
+      airDistanceCostFactor = 0.;
+
+      MatchedWaypoint startWp = new MatchedWaypoint();
+      startWp.waypoint = waypoints.get(0);
+      startWp.name = "from";
+      List<MatchedWaypoint> listOne = new ArrayList<>();
+      listOne.add(startWp);
+      matchWaypointsToNodes(listOne);
+
+      resetCache(false);
+      nodesCache.nodesMap.cleanupMode = 0; // keep every node: the whole area is the result
+
+      OsmNode start1 = nodesCache.getGraphNode(startWp.node1);
+      OsmNode start2 = nodesCache.getGraphNode(startWp.node2);
+      if (!nodesCache.obtainNonHollowNode(start1) || !nodesCache.obtainNonHollowNode(start2)) {
+        throw new IllegalArgumentException("start position not mapped");
+      }
+      nodesCache.expandHollowLinkTargets(start1);
+      nodesCache.expandHollowLinkTargets(start2);
+
+      OsmPath startPath1 = getStartPath(start1, start2, startWp, null, false);
+      OsmPath startPath2 = getStartPath(start2, start1, startWp, null, false);
+
+      List<FormatIsochrone.Section> sections = new ArrayList<>();
+      Map<Long, Float> nodeTimes = new HashMap<>();
+      openSet.clear();
+      if (startPath1 != null) addToOpenset(startPath1);
+      if (startPath2 != null) addToOpenset(startPath2);
+      nodesCache.nodesMap.currentMaxCost = 1000000000;
+      nodesCache.nodesMap.destination = null;
+
+      for (; ; ) {
+        if (terminated) {
+          throw new IllegalArgumentException("operation killed by thread-priority-watchdog");
+        }
+        if (maxRunningTime > 0 && System.currentTimeMillis() - startTime > maxRunningTime) {
+          throw new IllegalArgumentException("isochrone timeout after " + (maxRunningTime / 1000) + " seconds");
+        }
+
+        OsmPath path = openSet.popLowestKeyValue();
+        if (path == null) break;
+        if (path.airdistance == -1) continue;
+
+        OsmLink currentLink = path.getLink();
+        OsmNode sourceNode = path.getSourceNode();
+        OsmNode currentNode = path.getTargetNode();
+        if (currentLink.isLinkUnused()) continue;
+        linksProcessed++;
+
+        OsmLinkHolder firstLinkHolder = currentLink.getFirstLinkHolder(sourceNode);
+        for (OsmLinkHolder linkHolder = firstLinkHolder; linkHolder != null; linkHolder = linkHolder.getNextForLink()) {
+          ((OsmPath) linkHolder).airdistance = -1; // invalidate the other entries for this link
+        }
+
+        // Paths run at the cheapest cost, not the shortest time, so the time
+        // at the start of a section is that of the path that first reached it.
+        boolean isStart = path.treedepth == 1;
+        float t1 = (float) path.getTotalTime();
+        Float fromTime = isStart ? Float.valueOf(0f) : nodeTimes.get(sourceNode.getIdFromPos());
+        float t0 = fromTime == null ? t1 : Math.min(fromTime, t1);
+        if (t0 >= maxTime) continue;
+        sections.add(FormatIsochrone.section(currentLink, sourceNode, currentNode,
+          isStart ? startWp.crosspoint : null, t0, t1, routingContext.geometryDecoder));
+        Long currentNodeId = currentNode.getIdFromPos();
+        if (!nodeTimes.containsKey(currentNodeId)) nodeTimes.put(currentNodeId, t1);
+        if (t1 >= maxTime) continue;
+
+        if (path.treedepth > 1) {
+          boolean isBidir = currentLink.isBidirectional();
+          sourceNode.unlinkLink(currentLink);
+          if (isBidir && currentLink.getFirstLinkHolder(currentNode) == null && !routingContext.considerTurnRestrictions) {
+            currentNode.unlinkLink(currentLink);
+          }
+        }
+
+        nodesCache.nodesMap.currentPathCost = path.cost;
+        routingContext.firstPrePath = null;
+        for (OsmLink link = currentNode.firstlink; link != null; link = link.getNext(currentNode)) {
+          OsmNode nextNode = link.getTarget(currentNode);
+          if (!nodesCache.obtainNonHollowNode(nextNode)) continue;
+          if (nextNode.firstlink == null) continue;
+          if (nextNode == sourceNode) continue;
+          OsmPrePath prePath = routingContext.createPrePath(path, link);
+          if (prePath != null) {
+            prePath.next = routingContext.firstPrePath;
+            routingContext.firstPrePath = prePath;
+          }
+        }
+
+        for (OsmLink link = currentNode.firstlink; link != null; link = link.getNext(currentNode)) {
+          OsmNode nextNode = link.getTarget(currentNode);
+          if (!nodesCache.obtainNonHollowNode(nextNode)) continue;
+          if (nextNode.firstlink == null) continue;
+          if (nextNode == sourceNode) continue;
+
+          OsmPath bestPath = null;
+          for (OsmLinkHolder linkHolder = firstLinkHolder; linkHolder != null; linkHolder = linkHolder.getNextForLink()) {
+            OsmPath testPath = routingContext.createPath((OsmPath) linkHolder, link, null, false);
+            if (testPath.cost >= 0 && (bestPath == null || testPath.cost < bestPath.cost)
+              && testPath.sourceNode.getIdFromPos() != testPath.targetNode.getIdFromPos()) {
+              bestPath = testPath;
+            }
+          }
+          if (bestPath == null) continue;
+          bestPath.airdistance = 0;
+
+          OsmLinkHolder dominator = link.getFirstLinkHolder(currentNode);
+          while (dominator != null) {
+            OsmPath dp = (OsmPath) dominator;
+            if (dp.airdistance != -1 && bestPath.definitlyWorseThan(dp)) break;
+            dominator = dominator.getNextForLink();
+          }
+          if (dominator == null) {
+            bestPath.treedepth = path.treedepth + 1;
+            link.addLinkHolder(bestPath, currentNode);
+            addToOpenset(bestPath);
+          }
+        }
+      }
+
+      outputMessage = FormatIsochrone.format(sections, startWp.crosspoint, maxTime);
+      logInfo("isochrone: " + sections.size() + " sections in " + (System.currentTimeMillis() - startTime) + " ms");
+    } catch (Exception e) {
+      logException(e);
+    } finally {
+      routingContext.alwaysComputeTime = false;
+    }
   }
 
   private void addToOpenset(OsmPath path) {
