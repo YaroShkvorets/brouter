@@ -2324,7 +2324,7 @@ public class RoutingEngine extends Thread {
       startTime = System.currentTimeMillis();
       this.maxRunningTime = maxRunningTime;
       double maxTime = routingContext.isochroneTime;
-      if (!(maxTime > 0.) || maxTime > MAX_ISOCHRONE_TIME) {
+      if (Double.isNaN(maxTime) || maxTime <= 0. || maxTime > MAX_ISOCHRONE_TIME) {
         throw new IllegalArgumentException("isochroneTime must be between 1 and " + MAX_ISOCHRONE_TIME + " seconds");
       }
       routingContext.alwaysComputeTime = true;
@@ -2386,8 +2386,11 @@ public class RoutingEngine extends Thread {
         // at the start of a section is that of the path that first reached it.
         boolean isStart = path.treedepth == 1;
         float t1 = (float) path.getTotalTime();
-        Float fromTime = isStart ? Float.valueOf(0f) : nodeTimes.get(sourceNode.getIdFromPos());
-        float t0 = fromTime == null ? t1 : Math.min(fromTime, t1);
+        float t0 = 0f;
+        if (!isStart) {
+          Float fromTime = nodeTimes.get(sourceNode.getIdFromPos());
+          t0 = fromTime == null ? t1 : Math.min(fromTime, t1);
+        }
         if (t0 >= maxTime) continue;
         sections.add(FormatIsochrone.section(currentLink, sourceNode, currentNode,
           isStart ? startWp.crosspoint : null, t0, t1, routingContext.geometryDecoder));

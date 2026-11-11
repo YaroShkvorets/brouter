@@ -103,7 +103,7 @@ final class FormatIsochrone {
 
     int nBands = (int) Math.ceil(maxTime / 60.);
     List<List<int[][]>> bands = new ArrayList<>();
-    for (int b = 0; b < nBands; b++) bands.add(new ArrayList<int[][]>());
+    for (int b = 0; b < nBands; b++) bands.add(new ArrayList<>());
     for (Section s : sections) {
       if (!s.fromStart && s.t1 <= maxTime && whole.get(s.link) != s) continue;
       int[][] line = s.t1 > maxTime ? cut(s, maxTime) : new int[][]{s.ilon, s.ilat};
