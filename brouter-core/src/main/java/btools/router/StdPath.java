@@ -240,6 +240,8 @@ final class StdPath extends OsmPath {
       if (initialcost >= 1000000.) {
         return -1.;
       }
+      // time lost at the node (a stop sign, a signal), if the profile names it
+      totalTime += rc.expctxNode.getVariableValue("stopdelay", 0.f);
       if (message != null) {
         message.linknodecost += (int) initialcost;
         message.nodeKeyValues = rc.expctxNode.getKeyValueDescription(nodeAccessGranted, targetNode.nodeDescription);
